@@ -75,8 +75,12 @@ def main(argv=None):
     if argv is None:
         argv = sys.argv
 
-    parser = E.OptionParser(version="%prog version: $Id: fastas2fasta.py 2782 2009-09-10 11:40:29Z andreas $",
+    parser = E.OptionParser(version="%prog version: $Id:",
                             usage=globals()["__doc__"])
+
+    parser.add_option("-s", "--stack", action="store_true", dest="stack",
+                      help=("instead of concatenating reads, write out read 1"
+                            " and read 2 alternately"))
 
     (options, args) = E.Start(parser)
 
@@ -113,10 +117,15 @@ def main(argv=None):
 
         noutput += 1
 
-        options.stdout.write(">%s\n%s\n" % (ids[0],
-                                            "".join(sequences)))
+        if options.stack:
+            options.stdout.write("\n".join(['>' + x[0] + '\n' + x[1] for x in
+                                            zip(ids, sequences)]) + "\n")
+        else:
+            options.stdout.write(">%s\n%s\n" % (ids[0],
+                                                "".join(sequences)))
 
-    E.info("ninput=%i, noutput=%i, nerrors=%i" % (ninput, noutput, nerrors))
+            E.info("ninput=%i, noutput=%i, nerrors=%i" % (ninput, noutput,
+                                                          nerrors))
 
     E.Stop()
 
