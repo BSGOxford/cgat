@@ -10,3 +10,9 @@ version:
         outputs: [stdout]
         references: [out.fasta]
         options: <DIR>/a.fasta <DIR>/b.fasta
+
+stack:
+        stdin: null
+        outputs: [stdout]
+        references: [out_stacked.fasta]
+        options: <DIR>/a.fasta <DIR>/b.fasta --stack
