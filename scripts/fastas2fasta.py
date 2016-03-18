@@ -81,7 +81,12 @@ def main(argv=None):
     parser.add_option("-s", "--stack", action="store_true", dest="stack",
                       help=("instead of concatenating reads, write out read 1"
                             " and read 2 alternately"))
+    parser.add_option("-n", "--insert-separator", dest="insert_n",
+                      action="store_true",
+                      help=("insert a spacing N between the two concatentated"
+                            " sequences"))
 
+    
     (options, args) = E.Start(parser)
 
     if len(args) < 2:
@@ -121,8 +126,12 @@ def main(argv=None):
             options.stdout.write("\n".join(['>' + x[0] + '\n' + x[1] for x in
                                             zip(ids, sequences)]) + "\n")
         else:
+            if options.insert_n:
+                j = "N"
+            else:
+                j = ""
             options.stdout.write(">%s\n%s\n" % (ids[0],
-                                                "".join(sequences)))
+                                                j.join(sequences)))
 
             E.info("ninput=%i, noutput=%i, nerrors=%i" % (ninput, noutput,
                                                           nerrors))
