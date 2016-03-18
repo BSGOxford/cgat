@@ -99,6 +99,8 @@ def relative_abundance_iterator(infile):
                 group = "genus"
             elif group == "s":
                 group = "species"
+            elif group == "t":
+                group = "strain"
             else:
                 group = group
             yield RelativeAbundance().read(group, abundance[0], abundance[1])
