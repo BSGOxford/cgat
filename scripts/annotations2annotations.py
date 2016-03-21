@@ -34,7 +34,7 @@ def main(argv=None):
     parser.add_option("-o", "--othercol", dest="ocol", type="str",
                       help="column name or index of description")
 
-    parser.add_option("-d", "--delim1", dest="d1", type="str",
+    parser.add_option("--delim1", dest="d1", type="str",
                       help="column delimiter in input")
 
     parser.add_option("--delim2", dest="d2", type="str",
@@ -114,7 +114,7 @@ def readFile(options):
 
         if k > o:
             colnames = colnames[1], colnames[0]
-
+    
     i = 0
     res = []
     with IOTools.openFile(options.loc) as inf:
