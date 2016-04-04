@@ -1,3 +1,18 @@
+'''
+_annot - direct annotation of ensemblg to annotation term - something to test
+for enrichment
+
+_details - further details of an annotation e.g definitions of go terms
+
+_geneid - alternative gene id which may be used in other databases
+
+_other - another annotation (e.g. gene name, position etc.) which are of
+interest but are not relevent in enrichment testing)
+
+_ont - hierarchical ontology
+
+'''
+
 import CGATPipelines.Pipeline as P
 from Bio import Entrez
 import numpy as np
@@ -10,6 +25,8 @@ import re
 import os
 import datetime
 import xml.etree.ElementTree as ET
+import pandas as pd
+
 # load options from the config file
 PARAMS = P.getParameters(
     ["%s/pipeline.ini" % os.path.splitext(__file__)[0],
@@ -156,6 +173,12 @@ def add_db_table(dbname, tablename, cnames, ctypes, zipped, PS=False):
     dbh.close()
 
 
+def pd2sql(df, tabname):
+    dbh = sqlite3.connect(dbname)
+    df.to_sql(tabname, dbh, index=False, if_exists='replace')
+    dbh.close()
+
+
 def host2symbol(hostids):
     '''
     Translates entrez ids to gene symbols for different hosts, using the
@@ -186,12 +209,13 @@ def host2symbol(hostids):
         # Parse Json output into Python format and put it into a dictionary.
         jcon = json.loads(con)
         for line in jcon:
-            symboldict[line['query']] = line['symbol']
+            if 'symbol' in line:
+                symboldict[line['query']] = line['symbol']
     return symboldict
 
 
 def mineOntology(host_abb, genes, views, constraints=[], host="",
-                 table_name=None):
+                 name=None, hostpd=None, ind=None):
     '''
     Simplifies mining from mousemine, humanmine and other databases with
     APIs which use intermine.
@@ -278,12 +302,36 @@ def mineOntology(host_abb, genes, views, constraints=[], host="",
                 t.append(row[v])
             z.append(tuple(t))
             j += 1
+
+    symbols = []
+    terms = []
+    other = []
+    for k in z:
+        symbols.append(k[0])
+        terms.append(k[ind+1])
+        L = list(k)
+        L.remove(k[0])
+        L.remove(k[ind+1])
+        k2 = [k[ind+1]]
+        k2 += L
+        other.append(tuple(k2))
+
+    cols = [v.replace(".", "_") for v in views[0:ind] + views[(ind+1):]]
+
+    cname = hostpd.columns[1]
+    dfs = pd.DataFrame(zip(symbols, terms),
+                       columns=[cname, name])
+
+    results = hostpd.merge(dfs, left_on=cname, right_on=cname)
+    results = results.drop(cname, 1)
+    pd2sql(results, "ensemblg2%s$annot" % name)
+
     # add the new table to the database
     add_db_table(dbname,
-                 table_name,
-                 (['gene'] + [v.replace(".", "_") for v in views]),
-                 ["varchar(250)"] * (len(views) + 1),
-                 z)
+                 "%s$details" % name,
+                 ([name] + cols),
+                 ["varchar(250)"] * (len(views)),
+                 other, PS=True)
 
 
 def parseOwlOntology(ontologypath, tablename):
@@ -374,6 +422,8 @@ def getMyGeneInfo(allids):
 
     print 'retrieving data from mygeneinfo'
     fields = PARAMS['my_gene_info_annotations'].split(",")
+    if 'ensembl' not in fields:
+        fields.append('ensembl')
     DB = dict()
     # If the list of entrez ids is long, cut it into chunks of 500 ids to send
     # to the API in each query (this size seems to run the fastest overall).
@@ -473,15 +523,15 @@ def ParseAndLoadEnsembl(DB):
 
     # load the entrez2ensemblg table
     add_db_table(dbname,
-                 'entrez2ensemblg',
-                 ['entrez', 'ensemblg'],
+                 'ensemblg2entrez$geneid',
+                 ['ensemblg', 'entrez'],
                  ['int', 'varchar(25)'],
-                 zip(entrez2ensembl, ensembl2entrez))
+                 zip(ensembl2entrez, entrez2ensembl))
 
     # load transcript IDs if requested
     if 'all' in options or 'transcript' in options:
         add_db_table(dbname,
-                     'ensemblg2ensemblt',
+                     'ensemblg2ensemblt$other',
                      ['ensemblg', 'ensemblt'],
                      ['varchar(25)', 'varchar(25)'],
                      zip(g2t, t2g))
@@ -489,13 +539,16 @@ def ParseAndLoadEnsembl(DB):
     # load protein IDs if requested
     if 'all' in options or 'protein' in options:
         add_db_table(dbname,
-                     'ensemblg2ensemblp',
+                     'ensemblg2ensemblp$other',
                      ['ensemblg', 'ensemblp'],
                      ['varchar(25)', 'varchar(25)'],
                      zip(g2p, p2g))
+    ensdf = pd.DataFrame(zip(ensembl2entrez, entrez2ensembl),
+                         columns=['ensemblg', 'entrez'])
+    return ensdf
 
 
-def ParseAndLoadGO(DB):
+def ParseAndLoadGO(DB, ensdf):
     '''
     Parses and loads the GO dataset retrived from MyGeneInfo (in DB).
     Which GO namespace to store (any combination of BP (biological process),
@@ -545,23 +598,20 @@ def ParseAndLoadGO(DB):
                                 godict[subterm].append(L[subterm])
                             else:
                                 godict[subterm].append("")
-
-    # load the entrez ID to go id table
-    add_db_table(dbname,
-                 'entrez2go',
-                 ['entrez', 'go'],
-                 ['varchar(25)', 'varchar(25)'],
-                 zip(entrez2go, allgoids))
+    dfs = pd.DataFrame(zip(entrez2go, allgoids), columns=['entrez', 'go'])
+    results = ensdf.merge(dfs, left_on='entrez', right_on='entrez')
+    results = results.drop("entrez", 1)
+    pd2sql(results, "ensemblg2go$annot")
 
     # load the go id to go details table
     add_db_table(dbname,
-                 'goid2goinfo',
-                 ['goid', 'gotype', 'goterm', 'goevidence'],
+                 'go$details',
+                 ['go', 'gotype', 'goterm', 'goevidence'],
                  ['varchar(25)', 'varchar(25)', 'varchar(255)', 'varchar(25)'],
                  zip(goids, gotypes, godict['term'], godict['evidence']))
 
 
-def ParseAndLoadPathway(DB):
+def ParseAndLoadPathway(DB, ensdf):
     '''
     Parses the "pathway" dictionary extracted from MyGeneInfo above.
     The pathway annotation sets of interest are specified in pipeline.ini, or
@@ -622,21 +672,18 @@ def ParseAndLoadPathway(DB):
         name = D["%s_name" % db]
         identrez = zip(entrez2ids, ids2entrez)
         idname = zip(id, name)
-
+        dfs = pd.DataFrame(identrez, columns=['entrez', db])
+        results = ensdf.merge(dfs, left_on='entrez', right_on='entrez')
+        results = results.drop("entrez", 1)
+        pd2sql(results, "ensemblg2%s$annot" % db)
         add_db_table(dbname,
-                     'entrez2%s' % db,
-                     ['entrez', db],
-                     ['varchar(25)', 'varchar(25)'],
-                     identrez)
-
-        add_db_table(dbname,
-                     db,
-                     ['id', 'term'],
+                     "%s$details" % db,
+                     [db, 'term'],
                      ['varchar(25)', 'varchar(25)'],
                      idname)
 
 
-def ParseAndLoadHomologene(DB):
+def ParseAndLoadHomologene(DB, ensdf):
     '''
     Uses information from the homologene dataset retrieved from MyGeneInfo
     to link entrez IDs from the host organism to those of homologous genes
@@ -655,7 +702,9 @@ def ParseAndLoadHomologene(DB):
         print "homologene not available for this host"
         return 0
     homodb = DB['homologene']
-    taxa = PARAMS['my_gene_info_homologene'].split(",")
+    taxa = str(PARAMS['my_gene_info_homologene']).split(",")
+    if '9606' not in taxa:
+        taxa.append('9606')
 
     # retrieve IDs for all the taxa listed in PARAMS["my_gene_info_homologene"]
     # or if this is "all" check which taxa are in the input
@@ -684,11 +733,11 @@ def ParseAndLoadHomologene(DB):
         names.append(PARAMS['entrez_sciname'])
 
     # load species names into the species_ids database table
-    add_db_table(dbname,
-                 "species_ids",
-                 ['id', 'species'],
-                 ['varchar(25)', 'varchar(250)'],
-                 zip(allspp, names))
+    # add_db_table(dbname,
+    #              "species_ids",
+    #              ['id', 'species'],
+    #              ['varchar(25)', 'varchar(250)'],
+    #              zip(allspp, names))
 
     # parse the list of entrez ids in each host
 
@@ -704,24 +753,30 @@ def ParseAndLoadHomologene(DB):
                 host = names[allspp.index(hostid)]
                 hostdict[host].append(hostgeneid)
                 hostdict["%s_entrez" % host].append(q)
+    pdd = dict()
     # load database tables
     for host in names:
-        add_db_table(dbname,
-                     host,
-                     ['entrez', '%s_id' % host],
-                     ['varchar(25)', 'varchar(25)'],
-                     zip(hostdict['%s_entrez' % host], hostdict[host]))
-    for host in names:
+        hh = host.split("_")
+        hid = "%s%s" % (hh[0][0], hh[1][0:3])
         ids = host2symbol(hostdict[host])
-        add_db_table(dbname,
-                     "entrez2%s_symbol" % host,
-                     ['%s_entrez' % host, '%s_id' % host],
-                     ['varchar(25)', 'varchar(25)'],
-                     zip(ids.keys(), ids.values()))
-    return hostdict
+        df1 = pd.DataFrame(zip(hostdict['%s_entrez' % host], hostdict[host]),
+                           columns=['entrez', '%s_entrez' % hid])
+        df2 = pd.DataFrame(zip(ids.keys(), ids.values()),
+                           columns=['%s_entrez' % hid, '%s_symbol' % hid])
+        dfs = df1.merge(df2, left_on='%s_entrez' % hid,
+                        right_on='%s_entrez' % hid)
+        print dfs.columns
+        dfs = dfs.drop("%s_entrez" % hid, 1)
+
+        results = ensdf.merge(dfs, left_on='entrez', right_on='entrez')
+        results = results.drop("entrez", 1)
+        pd2sql(results, "ensemblg2%s_symbol$other" % hid)
+        pdd[host] = results
+
+    return hostdict, pdd
 
 
-def addMousePhenotypes(hostdict):
+def addMousePhenotypes(hostdict, pdd):
     '''
     Using the mineOntology function above, adds data from the mouse
     phenotype ontology to the database.
@@ -738,15 +793,17 @@ def addMousePhenotypes(hostdict):
              "ontologyAnnotations.ontologyTerm.namespace",
              "ontologyAnnotations.ontologyTerm.identifier"]
     m = hostdict["Mus_musculus"]
+    mousepd = pdd['Mus_musculus']
     mineOntology('mouse',
                  m,
                  views,
                  constraints,
                  "M. musculus",
-                 "mouse_phenotype")
+                 "MPI",
+                 mousepd, 3)
 
 
-def addMousePathways(hostdict):
+def addMousePathways(hostdict, pdd):
     '''
     Using the mineOntology function above, adds data about mouse
     pathways to the database.
@@ -759,15 +816,17 @@ def addMousePathways(hostdict):
     constraints = []
     m = hostdict["Mus_musculus"]
     views = ["pathways.identifier", "pathways.name"]
+    mousepd = pdd['Mus_musculus']
     mineOntology('mouse',
                  m,
                  views,
                  constraints,
                  "M. musculus",
-                 "mouse_pathway")
+                 "mousepathway",
+                 mousepd, 0)
 
 
-def addHumanPhenotypes(hostdict):
+def addHumanPhenotypes(hostdict, pdd):
     '''
     Using the mineOntology function above, adds data from the human
     phenotype ontology to the database.
@@ -780,6 +839,7 @@ def addHumanPhenotypes(hostdict):
     mining homologene for human"
     constraints = []
     h = hostdict["Homo_sapiens"]
+    humanpd = pdd['Homo_sapiens']
     views = ["diseases.hpoAnnotations.hpoTerm.description",
              "diseases.hpoAnnotations.hpoTerm.name",
              "diseases.hpoAnnotations.hpoTerm.namespace",
@@ -789,7 +849,8 @@ def addHumanPhenotypes(hostdict):
                  views,
                  constraints,
                  "",
-                 "hpo")
+                 "hpo",
+                 humanpd, 3)
 
 
 def main():
@@ -799,27 +860,27 @@ def main():
         return 0
     ids = getEntrezGeneIds()
     print "done"
-    symbols = host2symbol(ids)
-    add_db_table(dbname,
-                 "entrez2symbol",
-                 ['entrez', 'symbol'],
-                 ['varchar(25)', 'varchar(25)'],
-                 zip(symbols.keys(), symbols.values()))
 
     mgi = getMyGeneInfo(ids)
-    if len(PARAMS['my_gene_info_ensembl']) != 0:
-        ParseAndLoadEnsembl(mgi)
+    print "Loading ensembl ids"
+    ensdf = ParseAndLoadEnsembl(mgi)
+    print "done"
+    symbols = host2symbol(ids)
+    dfs = pd.DataFrame(zip(symbols.keys(), symbols.values()),
+                       columns=['entrez', 'symbol'])
+    results = ensdf.merge(dfs, left_on='entrez', right_on='entrez')
+    results = results.drop("entrez", 1)
+    pd2sql(results, "ensemblg2symbol$geneid")
+    annots = PARAMS['my_gene_info_annotations'].split(",")
+    if 'go' in annots and (len(PARAMS['my_gene_info_go']) != 0):
+        ParseAndLoadGO(mgi, ensdf)
+        parseOwlOntology(PARAMS['my_gene_info_goont'], "go$ont")
         print "done"
-
-    if len(PARAMS['my_gene_info_go']) != 0:
-        ParseAndLoadGO(mgi)
-        parseOwlOntology(PARAMS['my_gene_info_goont'], "go_ont")
+    if 'pathway' in annots and len(PARAMS['my_gene_info_pathway']) != 0:
+        ParseAndLoadPathway(mgi, ensdf)
         print "done"
-    if len(PARAMS['my_gene_info_pathway']) != 0:
-        ParseAndLoadPathway(mgi)
-        print "done"
-    if len(PARAMS['my_gene_info_homologene']) != 0:
-        D = ParseAndLoadHomologene(mgi)
+    if 'homologene' in annots and PARAMS['my_gene_info_homologene'] != '':
+        D, pdd = ParseAndLoadHomologene(mgi, ensdf)
         print "done"
     try:
         D.values()
@@ -827,14 +888,14 @@ def main():
         return 0
 
     if int(PARAMS['homologues_mousephenotype']) == 1:
-        addMousePhenotypes(D)
+        addMousePhenotypes(D, pdd)
         print "done"
     if int(PARAMS['homologues_mousepathway']) == 1:
-        addMousePathways(D)
+        addMousePathways(D, pdd)
         print "done"
     if int(PARAMS['homologues_hpo']) == 1:
-        addHumanPhenotypes(D)
-        parseOwlOntology(PARAMS['homologues_hpoont'], "hpo_ont")
+        addHumanPhenotypes(D, pdd)
+        parseOwlOntology(PARAMS['homologues_hpoont'], "hpo$ont")
         print "done"
 
 if __name__ == "__main__":
