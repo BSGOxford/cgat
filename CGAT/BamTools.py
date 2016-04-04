@@ -199,37 +199,24 @@ def estimateTagSize(bamfile,
 def getNumberOfAlignments(bamfile):
     '''return number of alignments in bamfile.
     '''
+    print bamfile
     samfile = pysam.Samfile(bamfile)
     return samfile.mapped
 
 
 def getNumReads(bamfile):
-    '''count number of reads in bam file.
-
-    This methods works through pysam.idxstats.
+    '''return number of reads in bam file.
 
     Arguments
     ---------
     bamfile : string
         Filename of :term:`bam` formatted file. The file needs
         to be indexed.
+
     Returns
     -------
     nreads : int
         Number of reads
     '''
-
-    lines = pysam.idxstats(bamfile)
-
-    try:
-        nreads = sum(
-            map(int, [x.split("\t")[2]
-                      for x in lines if not x.startswith("#")]))
-
-    except IndexError, msg:
-        raise IndexError(
-            "can't get number of reads from bamfile, msg=%s, data=%s" %
-            (msg, lines))
-    return nreads
-
-
+    with pysam.AlignmentFile(bamfile) as inf:
+        return inf.mapped + inf.unmapped

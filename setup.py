@@ -175,17 +175,13 @@ if major == 2:
 elif major == 3:
     pass
 
-if INSTALL_CGAT_CODE_COLLECTION:
-    cgat_packages = find_packages(exclude=["CGATPipelines*", "scripts*"])
-else:
-    cgat_packages = find_packages(exclude=["scripts*"])
+cgat_packages = find_packages(exclude=["scripts*"])
 
 # rename scripts to CGATScripts
 cgat_packages.append("CGATScripts")
 
 cgat_package_dirs = {'CGAT': 'CGAT',
-                     'CGATScripts': 'scripts',
-                     'CGATPipelines': 'CGATPipelines'}
+                     'CGATScripts': 'scripts'}
 
 ##########################################################
 ##########################################################
