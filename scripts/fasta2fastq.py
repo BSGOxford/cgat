@@ -64,10 +64,15 @@ Options
 --insert-length-sd
    the standard deviation for the insert length
 
+--minimum-length
+   reject all fasta entries below this length
+
 --premrna-fraction
    the fraction of reads to simulate from pre-mRNA. Default is 0.
    If set, must provide a pre-mRNA fasta file with:
       --infile-premrna-fasta
+
+
 
 If generating paired end reads, the second outfile must be specified with:
 
@@ -160,30 +165,43 @@ def generateRead(entry, read_length=50, error_rate=40, paired=False,
 
     if paired:
 
-        position = "not_OK"
+        # if entry too short to randomly generate fragments
+        if len(entry) < ((2 * read_length) + (insert_mean - insert_sd)):
+            # generate paired reads covering the whole fragment
+            read1 = entry[0: read_length]
+            read2 = reverseComp(entry[len(entry)-read_length:])
 
-        while position != "OK":
+        else:
+            position = "not_OK"
 
-            r1_start = random.randint(0, len(entry)-read_length)
-            r2_start = (r1_start + read_length +
-                        int(np.random.normal(insert_mean, insert_sd)))
+            # keep trying possible start positions and fragment lengths
+            while position != "OK":
 
-            if (r2_start <= (len(entry) - read_length) and r2_start >= r1_start):
+                r1_start = random.randint(0, len(entry)-read_length)
+                r2_start = (r1_start + read_length +
+                            int(np.random.normal(insert_mean, insert_sd)))
 
-                position = "OK"
+                if (r2_start <= (len(entry) - read_length) and r2_start >= r1_start):
 
-                read1 = entry[r1_start: r1_start+read_length]
-                read2 = reverseComp(
-                    entry[r2_start: r2_start+read_length])
+                    position = "OK"
 
-                final_read1 = addSeqErrors(read1, error_rate)
-                final_read2 = addSeqErrors(read2, error_rate)
+                    read1 = entry[r1_start: r1_start+read_length]
+                    read2 = reverseComp(
+                        entry[r2_start: r2_start+read_length])
 
-                return final_read1, final_read2
+        final_read1 = addSeqErrors(read1, error_rate)
+        final_read2 = addSeqErrors(read2, error_rate)
+
+        return final_read1, final_read2
 
     else:
-        start = random.randint(0, len(entry)-read_length)
-        read = entry[start:start+read_length]
+
+        if len(entry) <= read_length:
+            read = entry
+
+        else:
+            start = random.randint(0, len(entry)-read_length)
+            read = entry[start:start+read_length]
 
         final_read = addSeqErrors(read, error_rate)
 
@@ -264,6 +282,10 @@ def main(argv=None):
         "--infile-premrna-fasta", dest="premrna_fasta", type="string",
         help="filename for pre-mRNA fasta[default=%default].")
 
+    parser.add_option(
+        "--minimum-length", dest="minimum_entry_length", type="int",
+        help="reject all fasta entries below this length[default=%default].")
+
     parser.set_defaults(
         q_format=33,
         paired=False,
@@ -277,7 +299,8 @@ def main(argv=None):
         output_counts=None,
         phred=30,
         premrna_fraction=0,
-        premrna_fasta=None
+        premrna_fasta=None,
+        minimum_entry_length=0
     )
 
     (options, args) = E.Start(parser)
@@ -301,13 +324,6 @@ def main(argv=None):
     else:
         iterator = FastaIterator.FastaIterator(options.stdin)
 
-    # set a cut off of twice the read/pair length for short entries
-    if options.paired:
-        minimum_entry_length = (
-            2 * ((options.read_length * 2) + options.insert_mean))
-    else:
-        minimum_entry_length = 2 * options.read_length
-
     c = collections.Counter()
     counts = collections.Counter()
     copies = collections.Counter()
@@ -326,14 +342,15 @@ def main(argv=None):
             entry = f_entry
 
         # reject short fasta entries
-        if len(entry.sequence) < minimum_entry_length:
-            E.info("skipping short transcript: %s length=%i"
-                   % (entry.title, len(entry.sequence)))
-            c['skipped'] += 1
-            continue
+        if options.minimum_entry_length:
+            if len(entry.sequence) < minimum_entry_length:
+                E.info("skipping short transcript: %s length=%i"
+                       % (entry.title, len(entry.sequence)))
+                c['skipped'] += 1
+                continue
 
         else:
-            c['not_skipped'] += 1
+            c['retained'] += 1
 
         if options.paired:
             fragment_length = (
